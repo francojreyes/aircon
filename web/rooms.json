@@ -1,0 +1,23 @@
+[
+  {
+    "id": "livingroom",
+    "name": "Living Room",
+    "accent": "#4fc3f7",
+    "supportsQuiet": true,
+    "supportsNight": true
+  },
+  {
+    "id": "bedroom",
+    "name": "Bedroom",
+    "accent": "#ba68c8",
+    "supportsQuiet": true,
+    "supportsNight": true
+  },
+  {
+    "id": "study",
+    "name": "Study",
+    "accent": "#81c784",
+    "supportsQuiet": false,
+    "supportsNight": false
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "livingroom",
+    "host": "http://livingroom.local"
+  },
+  {
+    "id": "bedroom",
+    "host": "http://bedroom.local"
+  },
+  {
+    "id": "study",
+    "host": "http://study.local"
+  }
+]

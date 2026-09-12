@@ -1,0 +1,508 @@
+import { loadAircons } from "./config.js";
+import { ensureToken, fetchGet, fetchSet } from "./api.js";
+
+const TEMP_MIN = 18;
+const TEMP_MAX = 30;
+const FAN_LEVELS = ["1", "2", "3", "4", "5"];
+
+const icon = (name) =>
+  `<span class="material-symbols-outlined" aria-hidden="true">${name}</span>`;
+
+let AIRCONS = [];
+let roomState = {};
+let activeId = null;
+let panel;
+let form;
+
+const ROOM_STORAGE_KEY = "aircon_active_room";
+
+function activeRoom() {
+  return AIRCONS.find((room) => room.id === activeId);
+}
+
+function persistActiveRoom(id) {
+  localStorage.setItem(ROOM_STORAGE_KEY, id);
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("room") !== id) {
+    params.set("room", id);
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+    window.history.replaceState({}, "", next);
+  }
+}
+
+function resolveInitialRoomId() {
+  const fromUrl = new URLSearchParams(window.location.search).get("room");
+  if (fromUrl && AIRCONS.some((r) => r.id === fromUrl)) return fromUrl;
+  const fromStore = localStorage.getItem(ROOM_STORAGE_KEY);
+  if (fromStore && AIRCONS.some((r) => r.id === fromStore)) return fromStore;
+  return AIRCONS[0].id;
+}
+
+function initRoomState(rooms) {
+  roomState = Object.fromEntries(
+    rooms.map((room) => [
+      room.id,
+      {
+        online: null,
+        values: {
+          power: false,
+          temp: 25,
+          mode: "cool",
+          fan_speed: "auto",
+          quiet: false,
+        },
+      },
+    ])
+  );
+}
+
+function showToast(message, type) {
+  const toast = panel.querySelector(".toast");
+  toast.textContent = message;
+  toast.className = `toast toast--${type}`;
+  toast.hidden = false;
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.hidden = true;
+  }, 3000);
+}
+
+function renderStatusBadge(online) {
+  const badge = panel.querySelector(".status-badge");
+  if (online === null) {
+    badge.textContent = "Unknown";
+    badge.className = "status-badge status-badge--unknown";
+  } else if (online) {
+    badge.textContent = "Online";
+    badge.className = "status-badge status-badge--online";
+  } else {
+    badge.textContent = "Offline";
+    badge.className = "status-badge status-badge--offline";
+  }
+}
+
+/** Update online flag for a specific room; only refresh the badge if that room is visible. */
+function setRoomOnline(roomId, online) {
+  if (!roomState[roomId]) return;
+  roomState[roomId].online = online;
+  updateTabIndicators();
+  if (roomId === activeId) {
+    renderStatusBadge(online);
+    syncSendButton();
+  }
+}
+
+function syncSendButton() {
+  const sendBtn = form.querySelector(".send-btn");
+  sendBtn.disabled = roomState[activeId].online !== true;
+}
+
+function updateTabIndicators() {
+  panel.querySelectorAll(".room-tab").forEach((tab) => {
+    const online = roomState[tab.dataset.roomId].online;
+    tab.classList.toggle("is-online", online === true);
+    tab.classList.toggle("is-offline", online === false);
+    tab.classList.toggle("is-unknown", online === null);
+  });
+}
+
+function stateToValues(state) {
+  return {
+    power: Boolean(state.power),
+    temp: Number(state.temp ?? 25),
+    mode: state.mode === "fan" ? "fan" : "cool",
+    fan_speed: state.fan_speed ?? "auto",
+    quiet: Boolean(state.quiet),
+  };
+}
+
+function currentMode() {
+  return form.querySelector('[name="mode"]:checked')?.value ?? "cool";
+}
+
+function readForm() {
+  const mode = currentMode();
+  const params = {
+    power: form.querySelector('[name="power"]').checked ? "on" : "off",
+    mode,
+    fan_speed: form.querySelector('[name="fan_speed"]').value,
+  };
+
+  if (mode === "cool") {
+    params.temp = form.querySelector('[name="temp"]').value;
+  }
+
+  const quiet = form.querySelector('[name="quiet"]');
+  if (quiet) {
+    params.quiet = quiet.checked ? "on" : "off";
+  }
+
+  return params;
+}
+
+function captureFormValues() {
+  const quiet = form.querySelector('[name="quiet"]');
+  return {
+    power: form.querySelector('[name="power"]').checked,
+    temp: Number(form.querySelector('[name="temp"]').value),
+    mode: currentMode(),
+    fan_speed: form.querySelector('[name="fan_speed"]').value,
+    quiet: quiet ? quiet.checked : false,
+  };
+}
+
+function syncFormLocks() {
+  const powerOn = form.querySelector('[name="power"]').checked;
+  const fanMode = currentMode() === "fan";
+
+  form.classList.toggle("is-off", !powerOn);
+  form.classList.toggle("is-fan-mode", fanMode);
+
+  form.querySelectorAll(".depends-on-power").forEach((el) => {
+    if ("disabled" in el) el.disabled = !powerOn;
+  });
+
+  form.querySelectorAll(".depends-on-cool").forEach((el) => {
+    if ("disabled" in el) el.disabled = !powerOn || fanMode;
+  });
+}
+
+function setTemp(value) {
+  const temp = Math.min(TEMP_MAX, Math.max(TEMP_MIN, Number(value)));
+  form.querySelector('[name="temp"]').value = String(temp);
+  form.querySelector(".temp-display").textContent = `${temp}`;
+  form.querySelector(".temp-thumb").style.left = `${((temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * 100}%`;
+}
+
+function setFan(value) {
+  form.querySelector('[name="fan_speed"]').value = value;
+  form.querySelectorAll(".fan-option").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.value === value);
+  });
+}
+
+function setMode(mode) {
+  const radio = form.querySelector(`input[name="mode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  syncFormLocks();
+}
+
+function applyValues(values) {
+  const room = activeRoom();
+  let fanSpeed = values.fan_speed;
+  if (fanSpeed === "night" && !room.supportsNight) fanSpeed = "1";
+
+  form.querySelector('[name="power"]').checked = values.power;
+  form.querySelector(".power-label").textContent = values.power ? "On" : "Off";
+  setTemp(values.temp);
+  setMode(values.mode);
+  setFan(fanSpeed);
+
+  const quiet = form.querySelector('[name="quiet"]');
+  if (quiet) {
+    quiet.checked = values.quiet;
+    form.querySelector(".quiet-label").textContent = values.quiet ? "On" : "Off";
+  }
+
+  syncFormLocks();
+  syncSendButton();
+}
+
+function populateFromApi(state, roomId = activeId) {
+  const values = stateToValues(state);
+  roomState[roomId].values = values;
+  if (roomId === activeId) applyValues(values);
+}
+
+function buildTempTicks() {
+  const ticks = [];
+  for (let t = TEMP_MIN; t <= TEMP_MAX; t++) {
+    const isEndpoint = t === TEMP_MIN || t === TEMP_MAX;
+    ticks.push(
+      `<span class="temp-tick${isEndpoint ? " temp-tick--major" : ""}" style="left:${((t - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * 100}%"></span>`
+    );
+  }
+  return ticks.join("");
+}
+
+function buildFanBars(supportsNight) {
+  const auto = `
+    <button type="button" class="fan-option fan-option--icon depends-on-power" data-value="auto" aria-label="Auto fan" title="Auto">
+      ${icon("hdr_auto")}
+    </button>`;
+
+  const bars = FAN_LEVELS.map(
+    (level, i) => `
+      <button type="button" class="fan-option fan-option--bar depends-on-power" data-value="${level}" aria-label="Fan speed ${level}">
+        <span class="fan-bar" style="--bar-h: ${20 + i * 16}%"></span>
+      </button>`
+  ).join("");
+
+  const night = supportsNight
+    ? `<button type="button" class="fan-option fan-option--icon depends-on-power" data-value="night" aria-label="Night fan" title="Night">
+        ${icon("bedtime")}
+      </button>`
+    : "";
+
+  return `${auto}<div class="fan-bars">${bars}</div>${night}`;
+}
+
+function renderRoomExtras(room) {
+  form.querySelector(".fan-picker").innerHTML = buildFanBars(room.supportsNight);
+
+  const quietSlot = form.querySelector(".quiet-slot");
+  quietSlot.innerHTML = room.supportsQuiet
+    ? `<div class="field field--row depends-on-power-group">
+        <span>Quiet</span>
+        <label class="toggle-switch">
+          <input type="checkbox" name="quiet" value="on" class="depends-on-power" />
+          <span class="toggle-track"><span class="toggle-knob"></span></span>
+          <span class="quiet-label">Off</span>
+        </label>
+      </div>`
+    : "";
+
+  form.querySelectorAll(".fan-option").forEach((btn) => {
+    btn.addEventListener("click", () => setFan(btn.dataset.value));
+  });
+
+  const quietInput = form.querySelector('[name="quiet"]');
+  const quietLabel = form.querySelector(".quiet-label");
+  if (quietInput && quietLabel) {
+    quietInput.addEventListener("change", () => {
+      quietLabel.textContent = quietInput.checked ? "On" : "Off";
+    });
+  }
+}
+
+function switchRoom(id) {
+  if (id === activeId) return;
+
+  roomState[activeId].values = captureFormValues();
+  activeId = id;
+  persistActiveRoom(id);
+  const room = activeRoom();
+
+  panel.style.setProperty("--accent", room.accent);
+  panel.querySelectorAll(".room-tab").forEach((tab) => {
+    tab.classList.toggle("is-active", tab.dataset.roomId === id);
+    tab.setAttribute("aria-selected", String(tab.dataset.roomId === id));
+  });
+  setRoomOnline(id, roomState[id].online);
+  renderRoomExtras(room);
+  applyValues(roomState[id].values);
+  loadState({ silent: roomState[id].online === true, roomId: id });
+}
+
+async function loadState({ silent = false, roomId = activeId } = {}) {
+  const requestedId = roomId;
+  try {
+    const state = await fetchGet(requestedId);
+    populateFromApi(state, requestedId);
+    setRoomOnline(requestedId, true);
+    if (!silent && requestedId === activeId) showToast("State loaded", "success");
+  } catch (err) {
+    setRoomOnline(requestedId, false);
+    if (requestedId === activeId) {
+      applyValues(roomState[requestedId].values);
+      if (!silent) showToast(err.message, "error");
+    }
+  }
+}
+
+async function sendState() {
+  if (roomState[activeId].online !== true) return;
+
+  const requestedId = activeId;
+  const sendBtn = form.querySelector(".send-btn");
+  sendBtn.disabled = true;
+  try {
+    const params = readForm();
+    const state = await fetchSet(requestedId, params);
+    populateFromApi(state, requestedId);
+    setRoomOnline(requestedId, true);
+    if (requestedId === activeId) showToast("Command sent", "success");
+  } catch (err) {
+    setRoomOnline(requestedId, false);
+    if (requestedId === activeId) showToast(err.message, "error");
+  } finally {
+    if (requestedId === activeId) syncSendButton();
+  }
+}
+
+function createPanel() {
+  const room = activeRoom();
+  panel = document.createElement("article");
+  panel.className = "panel";
+  panel.style.setProperty("--accent", room.accent);
+
+  panel.innerHTML = `
+    <nav class="room-tabs" role="tablist" aria-label="Rooms">
+      ${AIRCONS.map(
+        (r) => `
+          <button type="button" class="room-tab${r.id === activeId ? " is-active" : ""}" role="tab" data-room-id="${r.id}" aria-selected="${r.id === activeId}">
+            <span class="room-tab-dot" style="--tab-accent:${r.accent}"></span>
+            <span class="room-tab-label">${r.name}</span>
+          </button>`
+      ).join("")}
+    </nav>
+
+    <div class="panel-body">
+      <header class="panel-header">
+        <span class="status-badge status-badge--unknown">Unknown</span>
+      </header>
+
+      <form class="card-form">
+        <div class="field field--row">
+          <span>Power</span>
+          <label class="toggle-switch">
+            <input type="checkbox" name="power" />
+            <span class="toggle-track"><span class="toggle-knob"></span></span>
+            <span class="power-label">Off</span>
+          </label>
+        </div>
+
+        <fieldset class="field depends-on-power-group">
+          <legend>Mode</legend>
+          <div class="segmented">
+            <label class="segment">
+              <input type="radio" name="mode" value="cool" class="depends-on-power" checked />
+              <span class="segment-face">${icon("ac_unit")}<span>Cool</span></span>
+            </label>
+            <label class="segment">
+              <input type="radio" name="mode" value="fan" class="depends-on-power" />
+              <span class="segment-face">${icon("mode_fan")}<span>Fan</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="field depends-on-power-group depends-on-cool-group">
+          <div class="temp-header">
+            <span>Temperature</span>
+            <div class="temp-value"><strong class="temp-display">25</strong><span class="temp-unit">°C</span></div>
+          </div>
+          <div class="temp-control">
+            <button type="button" class="stepper-btn temp-down depends-on-cool" aria-label="Decrease temperature">−</button>
+            <div class="temp-scale depends-on-cool" role="slider" aria-valuemin="${TEMP_MIN}" aria-valuemax="${TEMP_MAX}" tabindex="0">
+              <input type="hidden" name="temp" value="25" />
+              <div class="temp-track">
+                ${buildTempTicks()}
+                <span class="temp-thumb"></span>
+              </div>
+              <div class="temp-labels">
+                <span>${TEMP_MIN}°</span>
+                <span>${TEMP_MAX}°</span>
+              </div>
+            </div>
+            <button type="button" class="stepper-btn temp-up depends-on-cool" aria-label="Increase temperature">+</button>
+          </div>
+        </div>
+
+        <div class="field depends-on-power-group">
+          <span>Fan speed</span>
+          <input type="hidden" name="fan_speed" value="auto" />
+          <div class="fan-picker"></div>
+        </div>
+
+        <div class="quiet-slot"></div>
+
+        <div class="actions">
+          <button type="button" class="btn btn--ghost refresh-btn">Refresh</button>
+          <button type="submit" class="btn btn--primary send-btn" disabled>Send</button>
+        </div>
+      </form>
+
+      <p class="toast" hidden></p>
+    </div>
+  `;
+
+  form = panel.querySelector(".card-form");
+
+  panel.querySelectorAll(".room-tab").forEach((tab) => {
+    tab.addEventListener("click", () => switchRoom(tab.dataset.roomId));
+  });
+
+  form.querySelector('[name="power"]').addEventListener("change", (event) => {
+    form.querySelector(".power-label").textContent = event.target.checked ? "On" : "Off";
+    syncFormLocks();
+  });
+
+  form.querySelectorAll('input[name="mode"]').forEach((radio) => {
+    radio.addEventListener("change", () => syncFormLocks());
+  });
+
+  form.querySelector(".temp-down").addEventListener("click", () => {
+    if (form.classList.contains("is-fan-mode") || form.classList.contains("is-off")) return;
+    setTemp(Number(form.querySelector('[name="temp"]').value) - 1);
+  });
+  form.querySelector(".temp-up").addEventListener("click", () => {
+    if (form.classList.contains("is-fan-mode") || form.classList.contains("is-off")) return;
+    setTemp(Number(form.querySelector('[name="temp"]').value) + 1);
+  });
+
+  const scale = form.querySelector(".temp-scale");
+  const setTempFromClientX = (clientX) => {
+    const rect = scale.querySelector(".temp-track").getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    setTemp(Math.round(TEMP_MIN + ratio * (TEMP_MAX - TEMP_MIN)));
+  };
+
+  scale.addEventListener("pointerdown", (event) => {
+    if (form.classList.contains("is-off") || form.classList.contains("is-fan-mode")) return;
+    scale.setPointerCapture(event.pointerId);
+    setTempFromClientX(event.clientX);
+  });
+  scale.addEventListener("pointermove", (event) => {
+    if (!scale.hasPointerCapture(event.pointerId)) return;
+    setTempFromClientX(event.clientX);
+  });
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendState();
+  });
+
+  form.querySelector(".refresh-btn").addEventListener("click", () => loadState());
+
+  renderRoomExtras(room);
+  applyValues(roomState[activeId].values);
+}
+
+async function init() {
+  try {
+    await ensureToken();
+    AIRCONS = await loadAircons();
+  } catch (err) {
+    document.getElementById("app").innerHTML =
+      `<p class="toast toast--error">${err.message}</p>`;
+    return;
+  }
+
+  if (!AIRCONS.length) {
+    document.getElementById("app").innerHTML =
+      `<p class="toast toast--error">No rooms configured</p>`;
+    return;
+  }
+
+  initRoomState(AIRCONS);
+  activeId = resolveInitialRoomId();
+  persistActiveRoom(activeId);
+
+  createPanel();
+  document.getElementById("app").appendChild(panel);
+  updateTabIndicators();
+  setRoomOnline(activeId, null);
+
+  AIRCONS.forEach(async (room) => {
+    const roomId = room.id;
+    try {
+      const state = await fetchGet(roomId);
+      populateFromApi(state, roomId);
+      setRoomOnline(roomId, true);
+    } catch {
+      setRoomOnline(roomId, false);
+    }
+  });
+}
+
+init();
