@@ -2,8 +2,11 @@ const DEFAULT_TIMEOUT_MS = 12000;
 const TOKEN_KEY = "aircon_token";
 const API_BASE_KEY = "aircon_api_base";
 
-/** Default ngrok proxy (override with ?api= or localStorage). */
+/** Default ngrok proxy (override with ?api= for this tab session). */
 export const DEFAULT_API_BASE = "https://hefty-feminism-prissy.ngrok-free.dev";
+
+/** Set when ?api= is used; survives query stripping for the rest of this page load. */
+let apiBaseOverride = null;
 
 /** Strip trailing slash from API base. */
 export function normalizeApiBase(url) {
@@ -15,18 +18,21 @@ export function getApiBase() {
   const fromQuery = params.get("api");
   if (fromQuery) {
     const base = normalizeApiBase(fromQuery);
+    apiBaseOverride = base;
     localStorage.setItem(API_BASE_KEY, base);
     params.delete("api");
     const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
     window.history.replaceState({}, "", next);
     return base;
   }
-  // Hardcoded default; ignore stale localStorage unless set via ?api=
+  if (apiBaseOverride) return apiBaseOverride;
+  // Ignore stale localStorage — always fall back to hardcoded default unless ?api= this visit
   return DEFAULT_API_BASE;
 }
 
 export function setApiBase(url) {
   const base = normalizeApiBase(url);
+  apiBaseOverride = base || null;
   if (base) localStorage.setItem(API_BASE_KEY, base);
   else localStorage.removeItem(API_BASE_KEY);
 }
