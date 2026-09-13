@@ -9,9 +9,13 @@
 const uint16_t kIrLedPin = 4; // Physical Pin D2 on the NodeMCU
 IRac ac(kIrLedPin);
 
-// Only this needs changing per board:
+// Room is selected at compile time (-DAIRCON_ROOM=Livingroom|Bedroom|Study).
+// Default keeps IDE one-click uploads working without flags.
 enum class Room : uint8_t { Livingroom, Bedroom, Study };
-constexpr Room kRoom = Room::Study;
+#ifndef AIRCON_ROOM
+#define AIRCON_ROOM Livingroom
+#endif
+constexpr Room kRoom = Room::AIRCON_ROOM;
 
 const char* nameForRoom(Room room) {
   switch (room) {
@@ -302,7 +306,7 @@ void handleACSet() {
   sendCorsHeaders();
   applyQueryParams();
   sendIr();
-  const sent = ac.getStatePrev();
+  const auto sent = ac.getStatePrev();
   saveStateToEeprom(sent);
   server.send(200, "application/json", stateToJson(sent));
 }

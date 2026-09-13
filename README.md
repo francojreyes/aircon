@@ -6,7 +6,7 @@ IR control for Daikin aircons via ESP8266 boards, with a static web UI and a sma
 
 | Path | Role |
 |------|------|
-| [`aircon/`](aircon/) | Arduino firmware (`aircon.ino`) |
+| [`arduino/`](arduino/) | Firmware + `upload.sh` |
 | [`web/`](web/) | Static UI → **GitHub Pages** |
 | [`proxy/`](proxy/) | API proxy → **ngrok** |
 
@@ -35,4 +35,8 @@ Optional env:
 
 ## Firmware
 
-Flash [`aircon/aircon.ino`](aircon/aircon.ino) per board; set `kRoom` to `Livingroom` / `Bedroom` / `Study`.
+Flash [`arduino/aircon/aircon.ino`](arduino/aircon/aircon.ino) per board. Room is set at compile time (`-DAIRCON_ROOM=…`); for interactive flash:
+
+```bash
+./arduino/upload.sh
+```
