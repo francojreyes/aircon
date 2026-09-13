@@ -1,5 +1,5 @@
 {
-  "name": "Aircon Control",
+  "name": "Aircon Remote",
   "short_name": "Aircon",
   "description": "Control home aircons",
   "start_url": "./",
