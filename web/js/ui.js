@@ -357,10 +357,12 @@ function buildFanBars(supportsNight) {
 function buildToggleRow({ name, label, tip, lockClass }) {
   const info = tip
     ? `<span class="field-label">
-        <span>${label}</span>
-        <button type="button" class="info-btn" aria-label="About ${label}" aria-expanded="false">
-          ${icon("info")}
-        </button>
+        <span class="field-label-main">
+          <span class="field-label-text">${label}</span>
+          <button type="button" class="info-btn" aria-label="About ${label}" aria-expanded="false">
+            ${icon("info")}
+          </button>
+        </span>
         <span class="info-tip" role="tooltip">${tip}</span>
       </span>`
     : `<span>${label}</span>`;
@@ -433,7 +435,7 @@ function renderRoomExtras(room) {
       buildToggleRow({
         name: "economy",
         label: "Economy",
-        tip: "Caps power use—best for long runs once the room is cool.",
+        tip: "Limits power use. Should be used for long runs.",
         lockClass: "depends-on-extras-group",
       })
     );

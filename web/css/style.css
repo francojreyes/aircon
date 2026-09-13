@@ -180,29 +180,40 @@ body {
   gap: 1.1rem;
 }
 
-.card-form.is-off .depends-on-power-group {
+.card-form.is-off .depends-on-power-group:not(.depends-on-extras-group) {
   opacity: 0.4;
   pointer-events: none;
 }
 
 .card-form.is-temp-locked .depends-on-cool-group,
 .card-form.is-fan-locked .depends-on-fan-group,
-.card-form.is-quiet-locked .depends-on-quiet-group,
-.card-form.is-extras-locked .depends-on-extras-group {
+.card-form.is-quiet-locked .depends-on-quiet-group {
   opacity: 0.4;
   pointer-events: none;
 }
 
-/* Info tips stay usable while their row is dimmed/disabled */
-.card-form.is-off .field-label,
-.card-form.is-off .info-btn,
-.card-form.is-off .info-tip,
-.card-form.is-extras-locked .field-label,
-.card-form.is-extras-locked .info-btn,
-.card-form.is-extras-locked .info-tip,
-.card-form.is-quiet-locked .field-label,
-.card-form.is-quiet-locked .info-btn,
-.card-form.is-quiet-locked .info-tip {
+/*
+ * Extras rows: same 0.4 fade as other locks, but tip sits outside the faded
+ * wrapper so it stays readable when disabled.
+ */
+.card-form.is-off .depends-on-extras-group,
+.card-form.is-extras-locked .depends-on-extras-group {
+  pointer-events: none;
+}
+
+.card-form.is-off .depends-on-extras-group .field-label-main,
+.card-form.is-off .depends-on-extras-group .toggle-switch,
+.card-form.is-extras-locked .depends-on-extras-group .field-label-main,
+.card-form.is-extras-locked .depends-on-extras-group .toggle-switch {
+  opacity: 0.4;
+}
+
+.card-form.is-off .depends-on-extras-group .field-label,
+.card-form.is-off .depends-on-extras-group .info-btn,
+.card-form.is-off .depends-on-extras-group .info-tip,
+.card-form.is-extras-locked .depends-on-extras-group .field-label,
+.card-form.is-extras-locked .depends-on-extras-group .info-btn,
+.card-form.is-extras-locked .depends-on-extras-group .info-tip {
   pointer-events: auto;
 }
 
@@ -290,6 +301,12 @@ body {
   position: relative;
 }
 
+.field-label-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .info-btn {
   display: inline-flex;
   align-items: center;
@@ -320,18 +337,18 @@ body {
   position: absolute;
   left: 0;
   top: calc(100% + 0.35rem);
-  z-index: 5;
+  z-index: 20;
   width: max-content;
-  max-width: 11.5rem;
-  padding: 0.45rem 0.55rem;
+  max-width: 14rem;
+  padding: 0.4rem 0.5rem;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: #243247;
   color: var(--text);
   font-size: 0.72rem;
   font-weight: 500;
-  line-height: 1.35;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  line-height: 1.3;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 
 .field-label.is-tip-open .info-tip {
