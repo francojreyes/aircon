@@ -1,4 +1,4 @@
-import { loadAircons, featuresForProtocol } from "./config.js";
+import { getAircons, featuresForProtocol } from "./config.js";
 import { ensureToken, fetchGet, fetchSet } from "./api.js";
 
 const TEMP_MIN = 18;
@@ -18,6 +18,9 @@ let roomState = {};
 let activeId = null;
 let panel;
 let form;
+let booting = true;
+/** Skeleton ships DAIKIN152 controls (default Living Room tab). */
+let extrasKey = "true|true|true";
 
 const ROOM_STORAGE_KEY = "aircon_active_room";
 
@@ -67,6 +70,7 @@ function initRoomState(rooms) {
 }
 
 function showToast(message, type) {
+  if (!panel) return;
   const toast = panel.querySelector(".toast");
   toast.textContent = message;
   toast.className = `toast toast--${type}`;
@@ -106,8 +110,8 @@ function syncBusyUi() {
   renderStatusBadge();
 
   const refreshBtn = form.querySelector(".refresh-btn");
-  refreshBtn.disabled = state.loadingGet;
-  refreshBtn.textContent = state.loadingGet ? "Refreshing..." : "Refresh";
+  refreshBtn.disabled = state.loadingGet || booting;
+  refreshBtn.textContent = state.loadingGet || booting ? "Refreshing..." : "Refresh";
 
   const sendBtn = form.querySelector(".send-btn");
   if (state.sending) {
@@ -115,7 +119,7 @@ function syncBusyUi() {
     sendBtn.textContent = "Sending...";
   } else {
     sendBtn.textContent = "Send";
-    sendBtn.disabled = state.online !== true || state.loadingGet;
+    sendBtn.disabled = state.online !== true || state.loadingGet || booting;
   }
 }
 
@@ -335,17 +339,6 @@ function populateFromApi(state, roomId = activeId) {
   if (roomId === activeId) applyValues(values);
 }
 
-function buildTempTicks() {
-  const ticks = [];
-  for (let t = TEMP_MIN; t <= TEMP_MAX; t++) {
-    const isEndpoint = t === TEMP_MIN || t === TEMP_MAX;
-    ticks.push(
-      `<span class="temp-tick${isEndpoint ? " temp-tick--major" : ""}" style="left:${((t - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * 100}%"></span>`
-    );
-  }
-  return ticks.join("");
-}
-
 function buildFanBars(supportsNight) {
   const auto = `
     <button type="button" class="fan-option fan-option--icon depends-on-power depends-on-fan" data-value="auto" aria-label="Auto fan" title="Auto">
@@ -394,7 +387,8 @@ function buildToggleRow({ name, label, tip, lockClass }) {
 function bindToggleLabel(name) {
   const input = form.querySelector(`[name="${name}"]`);
   const label = form.querySelector(`.${name}-label`);
-  if (!input || !label) return;
+  if (!input || !label || input.dataset.labelBound) return;
+  input.dataset.labelBound = "1";
   input.addEventListener("change", () => {
     label.textContent = input.checked ? "On" : "Off";
   });
@@ -404,7 +398,8 @@ function bindInfoTips(root) {
   if (!root) return;
   root.querySelectorAll(".field-label").forEach((wrap) => {
     const btn = wrap.querySelector(".info-btn");
-    if (!btn) return;
+    if (!btn || btn.dataset.tipBound) return;
+    btn.dataset.tipBound = "1";
     btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -421,60 +416,72 @@ function bindInfoTips(root) {
   });
 }
 
-function renderRoomExtras(room) {
-  const features = featuresOf(room);
-  form.querySelector(".fan-picker").innerHTML = buildFanBars(features.night);
-
-  const parts = [];
-  if (features.quiet) {
-    parts.push(
-      buildToggleRow({
-        name: "quiet",
-        label: "Quiet",
-        tip: null,
-        lockClass: "depends-on-quiet-group",
-      })
-    );
-  }
-  if (features.comfortEconomy) {
-    parts.push(
-      buildToggleRow({
-        name: "comfort",
-        label: "Comfort",
-        tip: "Aims airflow up, away from people. Locks fan to Auto.",
-        lockClass: "depends-on-extras-group",
-      })
-    );
-    parts.push(
-      buildToggleRow({
-        name: "economy",
-        label: "Economy",
-        tip: "Limits power use. Should be used for long runs.",
-        lockClass: "depends-on-extras-group",
-      })
-    );
-  }
-
+function wireExtrasControls() {
   const extrasSlot = form.querySelector(".extras-slot");
-  if (extrasSlot) extrasSlot.innerHTML = parts.join("");
-
-  form.querySelectorAll(".fan-option").forEach((btn) => {
-    btn.addEventListener("click", () => setFan(btn.dataset.value));
-  });
-
   bindToggleLabel("quiet");
   bindToggleLabel("comfort");
   bindToggleLabel("economy");
   bindInfoTips(extrasSlot);
 
   const comfortInput = form.querySelector('[name="comfort"]');
-  if (comfortInput) {
+  if (comfortInput && !comfortInput.dataset.comfortBound) {
+    comfortInput.dataset.comfortBound = "1";
     comfortInput.addEventListener("change", () => {
       if (comfortInput.checked) rememberFanBeforeAutoLock();
       else restoreFanAfterAutoLock();
       syncFormLocks();
     });
   }
+}
+
+function featuresKey(features) {
+  return `${features.quiet}|${features.night}|${features.comfortEconomy}`;
+}
+
+function renderRoomExtras(room) {
+  const features = featuresOf(room);
+  const key = featuresKey(features);
+
+  // Avoid rewriting DOM when controls already match (prevents load flash).
+  if (key !== extrasKey) {
+    extrasKey = key;
+    form.querySelector(".fan-picker").innerHTML = buildFanBars(features.night);
+
+    const parts = [];
+    if (features.quiet) {
+      parts.push(
+        buildToggleRow({
+          name: "quiet",
+          label: "Quiet",
+          tip: null,
+          lockClass: "depends-on-quiet-group",
+        })
+      );
+    }
+    if (features.comfortEconomy) {
+      parts.push(
+        buildToggleRow({
+          name: "comfort",
+          label: "Comfort",
+          tip: "Aims airflow up, away from people. Locks fan to Auto.",
+          lockClass: "depends-on-extras-group",
+        })
+      );
+      parts.push(
+        buildToggleRow({
+          name: "economy",
+          label: "Economy",
+          tip: "Limits power use. Should be used for long runs.",
+          lockClass: "depends-on-extras-group",
+        })
+      );
+    }
+
+    const extrasSlot = form.querySelector(".extras-slot");
+    if (extrasSlot) extrasSlot.innerHTML = parts.join("");
+  }
+
+  wireExtrasControls();
 }
 
 function switchRoom(id) {
@@ -543,97 +550,17 @@ async function sendState() {
   }
 }
 
-function createPanel() {
-  const room = activeRoom();
-  panel = document.createElement("article");
-  panel.className = "panel";
-  panel.style.setProperty("--accent", room.accent);
-
-  panel.innerHTML = `
-    <nav class="room-tabs" role="tablist" aria-label="Rooms">
-      ${AIRCONS.map(
-        (r) => `
-          <button type="button" class="room-tab${r.id === activeId ? " is-active" : ""}" role="tab" data-room-id="${r.id}" aria-selected="${r.id === activeId}">
-            <span class="room-tab-dot" style="--tab-accent:${r.accent}"></span>
-            <span class="room-tab-label">${r.name}</span>
-          </button>`
-      ).join("")}
-    </nav>
-
-    <div class="panel-body">
-      <header class="panel-header">
-        <span class="status-badge status-badge--connecting">Connecting</span>
-      </header>
-
-      <form class="card-form">
-        <div class="field field--row">
-          <span>Power</span>
-          <label class="toggle-switch">
-            <input type="checkbox" name="power" />
-            <span class="toggle-track"><span class="toggle-knob"></span></span>
-            <span class="power-label">Off</span>
-          </label>
-        </div>
-
-        <fieldset class="field depends-on-power-group">
-          <legend>Mode</legend>
-          <div class="segmented">
-            <label class="segment">
-              <input type="radio" name="mode" value="cool" class="depends-on-power" checked />
-              <span class="segment-face">${icon("ac_unit")}<span>Cool</span></span>
-            </label>
-            <label class="segment">
-              <input type="radio" name="mode" value="dry" class="depends-on-power" />
-              <span class="segment-face">${icon("water_drop")}<span>Dry</span></span>
-            </label>
-            <label class="segment">
-              <input type="radio" name="mode" value="fan" class="depends-on-power" />
-              <span class="segment-face">${icon("mode_fan")}<span>Fan</span></span>
-            </label>
-          </div>
-        </fieldset>
-
-        <div class="field depends-on-power-group depends-on-cool-group">
-          <div class="temp-header">
-            <span>Temperature</span>
-            <div class="temp-value"><strong class="temp-display">25</strong><span class="temp-unit">°C</span></div>
-          </div>
-          <div class="temp-control">
-            <button type="button" class="stepper-btn temp-down depends-on-cool" aria-label="Decrease temperature">−</button>
-            <div class="temp-scale depends-on-cool" role="slider" aria-valuemin="${TEMP_MIN}" aria-valuemax="${TEMP_MAX}" tabindex="0">
-              <input type="hidden" name="temp" value="25" />
-              <div class="temp-track">
-                ${buildTempTicks()}
-                <span class="temp-thumb"></span>
-              </div>
-              <div class="temp-labels">
-                <span>${TEMP_MIN}°</span>
-                <span>${TEMP_MAX}°</span>
-              </div>
-            </div>
-            <button type="button" class="stepper-btn temp-up depends-on-cool" aria-label="Increase temperature">+</button>
-          </div>
-        </div>
-
-        <div class="field depends-on-power-group depends-on-fan-group">
-          <span>Fan speed</span>
-          <input type="hidden" name="fan_speed" value="auto" />
-          <div class="fan-picker"></div>
-        </div>
-
-        <div class="extras-slot"></div>
-
-        <div class="actions">
-          <button type="button" class="btn btn--ghost refresh-btn">Refresh</button>
-          <button type="submit" class="btn btn--primary send-btn" disabled>Send</button>
-        </div>
-      </form>
-
-      <p class="toast" hidden></p>
-    </div>
-  `;
-
+function bindPanel() {
+  panel = document.querySelector("#app .panel");
   form = panel.querySelector(".card-form");
+  const room = activeRoom();
+
+  panel.style.setProperty("--accent", room.accent);
+  panel.querySelectorAll(".room-tab").forEach((tab) => {
+    const selected = tab.dataset.roomId === activeId;
+    tab.classList.toggle("is-active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+  });
 
   panel.querySelectorAll(".room-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchRoom(tab.dataset.roomId));
@@ -693,43 +620,45 @@ function createPanel() {
 
   form.querySelector(".refresh-btn").addEventListener("click", () => loadState());
 
+  // Fan buttons: delegate so rebuilds don't need re-binding each click target.
+  form.querySelector(".fan-picker").addEventListener("click", (event) => {
+    const btn = event.target.closest(".fan-option");
+    if (!btn || btn.disabled) return;
+    setFan(btn.dataset.value);
+  });
+
   renderRoomExtras(room);
   applyValues(roomState[activeId].values);
   syncBusyUi();
 }
 
 async function init() {
-  try {
-    await ensureToken();
-    AIRCONS = await loadAircons();
-  } catch (err) {
-    document.getElementById("app").innerHTML =
-      `<p class="toast toast--error">${err.message}</p>`;
-    return;
-  }
-
-  if (!AIRCONS.length) {
-    document.getElementById("app").innerHTML =
-      `<p class="toast toast--error">No rooms configured</p>`;
-    return;
-  }
-
+  AIRCONS = getAircons();
   initRoomState(AIRCONS);
   activeId = resolveInitialRoomId();
   persistActiveRoom(activeId);
 
   try {
-    createPanel();
-    document.getElementById("app").appendChild(panel);
+    bindPanel();
     updateTabIndicators();
-    syncBusyUi();
   } catch (err) {
+    console.error(err);
     document.getElementById("app").innerHTML =
       `<p class="toast toast--error">${err.message || err}</p>`;
-    console.error(err);
     return;
   }
 
+  try {
+    await ensureToken();
+  } catch (err) {
+    booting = false;
+    showToast(err.message, "error");
+    AIRCONS.forEach((room) => setRoomOnline(room.id, false));
+    syncBusyUi();
+    return;
+  }
+
+  booting = false;
   AIRCONS.forEach((room) => {
     loadState({ silent: true, roomId: room.id });
   });

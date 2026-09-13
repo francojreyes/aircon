@@ -19,7 +19,173 @@
       <h1>Aircon Remote</h1>
       <p>Manage all rooms from one place</p>
     </header>
-    <main id="app" class="app"></main>
-    <script type="module" src="js/ui.js?v=9"></script>
+    <main id="app" class="app">
+      <article class="panel" style="--accent: #8b9cb3">
+        <nav class="room-tabs" role="tablist" aria-label="Rooms">
+          <button type="button" class="room-tab is-active is-unknown" role="tab" data-room-id="livingroom" aria-selected="true">
+            <span class="room-tab-dot" style="--tab-accent: #4fc3f7"></span>
+            <span class="room-tab-label">Living Room</span>
+          </button>
+          <button type="button" class="room-tab is-unknown" role="tab" data-room-id="bedroom" aria-selected="false">
+            <span class="room-tab-dot" style="--tab-accent: #ba68c8"></span>
+            <span class="room-tab-label">Bedroom</span>
+          </button>
+          <button type="button" class="room-tab is-unknown" role="tab" data-room-id="study" aria-selected="false">
+            <span class="room-tab-dot" style="--tab-accent: #81c784"></span>
+            <span class="room-tab-label">Study</span>
+          </button>
+        </nav>
+
+        <div class="panel-body">
+          <header class="panel-header">
+            <span class="status-badge status-badge--connecting">Connecting</span>
+          </header>
+
+          <form class="card-form is-off">
+            <div class="field field--row">
+              <span>Power</span>
+              <label class="toggle-switch">
+                <input type="checkbox" name="power" />
+                <span class="toggle-track"><span class="toggle-knob"></span></span>
+                <span class="power-label">Off</span>
+              </label>
+            </div>
+
+            <fieldset class="field depends-on-power-group">
+              <legend>Mode</legend>
+              <div class="segmented">
+                <label class="segment">
+                  <input type="radio" name="mode" value="cool" class="depends-on-power" checked disabled />
+                  <span class="segment-face"><span class="material-symbols-outlined" aria-hidden="true">ac_unit</span><span>Cool</span></span>
+                </label>
+                <label class="segment">
+                  <input type="radio" name="mode" value="dry" class="depends-on-power" disabled />
+                  <span class="segment-face"><span class="material-symbols-outlined" aria-hidden="true">water_drop</span><span>Dry</span></span>
+                </label>
+                <label class="segment">
+                  <input type="radio" name="mode" value="fan" class="depends-on-power" disabled />
+                  <span class="segment-face"><span class="material-symbols-outlined" aria-hidden="true">mode_fan</span><span>Fan</span></span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div class="field depends-on-power-group depends-on-cool-group">
+              <div class="temp-header">
+                <span>Temperature</span>
+                <div class="temp-value"><strong class="temp-display">25</strong><span class="temp-unit">°C</span></div>
+              </div>
+              <div class="temp-control">
+                <button type="button" class="stepper-btn temp-down depends-on-cool" aria-label="Decrease temperature" disabled>−</button>
+                  <div class="temp-scale depends-on-cool" role="slider" aria-valuemin="18" aria-valuemax="30" tabindex="0">
+                  <input type="hidden" name="temp" value="25" />
+                  <div class="temp-track">
+                    <span class="temp-tick temp-tick--major" style="left:0%"></span>
+                    <span class="temp-tick" style="left:8.333%"></span>
+                    <span class="temp-tick" style="left:16.667%"></span>
+                    <span class="temp-tick" style="left:25%"></span>
+                    <span class="temp-tick" style="left:33.333%"></span>
+                    <span class="temp-tick" style="left:41.667%"></span>
+                    <span class="temp-tick" style="left:50%"></span>
+                    <span class="temp-tick" style="left:58.333%"></span>
+                    <span class="temp-tick" style="left:66.667%"></span>
+                    <span class="temp-tick" style="left:75%"></span>
+                    <span class="temp-tick" style="left:83.333%"></span>
+                    <span class="temp-tick" style="left:91.667%"></span>
+                    <span class="temp-tick temp-tick--major" style="left:100%"></span>
+                    <span class="temp-thumb" style="left:58.333%"></span>
+                  </div>
+                  <div class="temp-labels">
+                    <span>18°</span>
+                    <span>30°</span>
+                  </div>
+                </div>
+                <button type="button" class="stepper-btn temp-up depends-on-cool" aria-label="Increase temperature" disabled>+</button>
+              </div>
+            </div>
+
+            <div class="field depends-on-power-group depends-on-fan-group">
+              <span>Fan speed</span>
+              <input type="hidden" name="fan_speed" value="auto" />
+              <div class="fan-picker">
+                <button type="button" class="fan-option fan-option--icon depends-on-power depends-on-fan is-active" data-value="auto" aria-label="Auto fan" title="Auto" disabled>
+                  <span class="material-symbols-outlined" aria-hidden="true">hdr_auto</span>
+                </button>
+                <div class="fan-bars">
+                  <button type="button" class="fan-option fan-option--bar depends-on-power depends-on-fan" data-value="1" aria-label="Fan speed 1" disabled>
+                    <span class="fan-bar" style="--bar-h: 20%"></span>
+                  </button>
+                  <button type="button" class="fan-option fan-option--bar depends-on-power depends-on-fan" data-value="2" aria-label="Fan speed 2" disabled>
+                    <span class="fan-bar" style="--bar-h: 36%"></span>
+                  </button>
+                  <button type="button" class="fan-option fan-option--bar depends-on-power depends-on-fan" data-value="3" aria-label="Fan speed 3" disabled>
+                    <span class="fan-bar" style="--bar-h: 52%"></span>
+                  </button>
+                  <button type="button" class="fan-option fan-option--bar depends-on-power depends-on-fan" data-value="4" aria-label="Fan speed 4" disabled>
+                    <span class="fan-bar" style="--bar-h: 68%"></span>
+                  </button>
+                  <button type="button" class="fan-option fan-option--bar depends-on-power depends-on-fan" data-value="5" aria-label="Fan speed 5" disabled>
+                    <span class="fan-bar" style="--bar-h: 84%"></span>
+                  </button>
+                </div>
+                <button type="button" class="fan-option fan-option--icon depends-on-power depends-on-fan" data-value="night" aria-label="Night fan" title="Night" disabled>
+                  <span class="material-symbols-outlined" aria-hidden="true">bedtime</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="extras-slot">
+              <div class="field field--row depends-on-power-group depends-on-quiet-group">
+                <span>Quiet</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" name="quiet" value="on" class="depends-on-power depends-on-quiet" disabled />
+                  <span class="toggle-track"><span class="toggle-knob"></span></span>
+                  <span class="quiet-label">Off</span>
+                </label>
+              </div>
+              <div class="field field--row depends-on-power-group depends-on-extras-group">
+                <span class="field-label">
+                  <span class="field-label-main">
+                    <span class="field-label-text">Comfort</span>
+                    <button type="button" class="info-btn" aria-label="About Comfort" aria-expanded="false">
+                      <span class="material-symbols-outlined" aria-hidden="true">info</span>
+                    </button>
+                  </span>
+                  <span class="info-tip" role="tooltip">Aims airflow up, away from people. Locks fan to Auto.</span>
+                </span>
+                <label class="toggle-switch">
+                  <input type="checkbox" name="comfort" value="on" class="depends-on-power depends-on-extras" disabled />
+                  <span class="toggle-track"><span class="toggle-knob"></span></span>
+                  <span class="comfort-label">Off</span>
+                </label>
+              </div>
+              <div class="field field--row depends-on-power-group depends-on-extras-group">
+                <span class="field-label">
+                  <span class="field-label-main">
+                    <span class="field-label-text">Economy</span>
+                    <button type="button" class="info-btn" aria-label="About Economy" aria-expanded="false">
+                      <span class="material-symbols-outlined" aria-hidden="true">info</span>
+                    </button>
+                  </span>
+                  <span class="info-tip" role="tooltip">Limits power use. Should be used for long runs.</span>
+                </span>
+                <label class="toggle-switch">
+                  <input type="checkbox" name="economy" value="on" class="depends-on-power depends-on-extras" disabled />
+                  <span class="toggle-track"><span class="toggle-knob"></span></span>
+                  <span class="economy-label">Off</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="actions">
+              <button type="button" class="btn btn--ghost refresh-btn" disabled>Refreshing...</button>
+              <button type="submit" class="btn btn--primary send-btn" disabled>Send</button>
+            </div>
+          </form>
+
+          <p class="toast" hidden></p>
+        </div>
+      </article>
+    </main>
+    <script type="module" src="js/ui.js?v=11"></script>
   </body>
 </html>
