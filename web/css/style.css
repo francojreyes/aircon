@@ -185,9 +185,25 @@ body {
   pointer-events: none;
 }
 
-.card-form.is-fan-mode .depends-on-cool-group {
+.card-form.is-temp-locked .depends-on-cool-group,
+.card-form.is-fan-locked .depends-on-fan-group,
+.card-form.is-quiet-locked .depends-on-quiet-group,
+.card-form.is-extras-locked .depends-on-extras-group {
   opacity: 0.4;
   pointer-events: none;
+}
+
+/* Info tips stay usable while their row is dimmed/disabled */
+.card-form.is-off .field-label,
+.card-form.is-off .info-btn,
+.card-form.is-off .info-tip,
+.card-form.is-extras-locked .field-label,
+.card-form.is-extras-locked .info-btn,
+.card-form.is-extras-locked .info-tip,
+.card-form.is-quiet-locked .field-label,
+.card-form.is-quiet-locked .info-btn,
+.card-form.is-quiet-locked .info-tip {
+  pointer-events: auto;
 }
 
 .field {
@@ -259,15 +275,84 @@ body {
 }
 
 .power-label,
-.quiet-label {
+.quiet-label,
+.comfort-label,
+.economy-label {
   font-size: 0.85rem;
   font-weight: 600;
   min-width: 1.75rem;
 }
 
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  position: relative;
+}
+
+.info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.info-btn .material-symbols-outlined {
+  font-size: 1rem;
+  width: 1rem;
+  height: 1rem;
+}
+
+.info-btn:hover,
+.info-btn[aria-expanded="true"] {
+  color: var(--accent);
+}
+
+.info-tip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 5;
+  width: max-content;
+  max-width: 11.5rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.35;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.field-label.is-tip-open .info-tip {
+  display: block;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .field-label:hover .info-tip {
+    display: block;
+  }
+}
+
+.extras-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
 .segmented {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 0.35rem;
   background: var(--bg);
   padding: 0.3rem;

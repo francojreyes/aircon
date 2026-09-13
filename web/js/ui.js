@@ -1,4 +1,4 @@
-import { loadAircons } from "./config.js";
+import { loadAircons, featuresForProtocol } from "./config.js";
 import { ensureToken, fetchGet, fetchSet } from "./api.js";
 
 const TEMP_MIN = 18;
@@ -7,6 +7,11 @@ const FAN_LEVELS = ["1", "2", "3", "4", "5"];
 
 const icon = (name) =>
   `<span class="material-symbols-outlined" aria-hidden="true">${name}</span>`;
+
+/** Prefer attached features; otherwise derive from protocol (default: limited). */
+function featuresOf(room) {
+  return room.features ?? featuresForProtocol(room.protocol);
+}
 
 let AIRCONS = [];
 let roomState = {};
@@ -44,12 +49,15 @@ function initRoomState(rooms) {
       room.id,
       {
         online: null,
+        fanBeforeAutoLock: null,
         values: {
           power: false,
           temp: 25,
           mode: "cool",
           fan_speed: "auto",
           quiet: false,
+          comfort: false,
+          economy: false,
         },
       },
     ])
@@ -107,12 +115,16 @@ function updateTabIndicators() {
 }
 
 function stateToValues(state) {
+  const mode = ["cool", "fan", "dry"].includes(state.mode) ? state.mode : "cool";
+  const cooling = mode === "cool" || mode === "dry";
   return {
     power: Boolean(state.power),
     temp: Number(state.temp ?? 25),
-    mode: state.mode === "fan" ? "fan" : "cool",
+    mode,
     fan_speed: state.fan_speed ?? "auto",
-    quiet: Boolean(state.quiet),
+    quiet: mode === "cool" ? Boolean(state.quiet) : false,
+    comfort: cooling ? Boolean(state.comfort) : false,
+    economy: cooling ? Boolean(state.economy) : false,
   };
 }
 
@@ -120,21 +132,38 @@ function currentMode() {
   return form.querySelector('[name="mode"]:checked')?.value ?? "cool";
 }
 
+function toggleParam(name) {
+  const el = form.querySelector(`[name="${name}"]`);
+  return el && el.checked ? "on" : "off";
+}
+
 function readForm() {
   const mode = currentMode();
+  const room = activeRoom();
   const params = {
     power: form.querySelector('[name="power"]').checked ? "on" : "off",
     mode,
-    fan_speed: form.querySelector('[name="fan_speed"]').value,
   };
 
   if (mode === "cool") {
     params.temp = form.querySelector('[name="temp"]').value;
+    params.fan_speed = form.querySelector('[name="fan_speed"]').value;
+    if (featuresOf(room).quiet) params.quiet = toggleParam("quiet");
+  } else if (mode === "fan") {
+    params.fan_speed = form.querySelector('[name="fan_speed"]').value;
+    params.quiet = "off";
+    params.comfort = "off";
+    params.economy = "off";
+  } else if (mode === "dry") {
+    params.quiet = "off";
+    params.fan_speed = "auto";
   }
 
-  const quiet = form.querySelector('[name="quiet"]');
-  if (quiet) {
-    params.quiet = quiet.checked ? "on" : "off";
+  if (mode === "cool" || mode === "dry") {
+    if (featuresOf(room).comfortEconomy) {
+      params.comfort = toggleParam("comfort");
+      params.economy = toggleParam("economy");
+    }
   }
 
   return params;
@@ -142,29 +171,74 @@ function readForm() {
 
 function captureFormValues() {
   const quiet = form.querySelector('[name="quiet"]');
+  const comfort = form.querySelector('[name="comfort"]');
+  const economy = form.querySelector('[name="economy"]');
   return {
     power: form.querySelector('[name="power"]').checked,
     temp: Number(form.querySelector('[name="temp"]').value),
     mode: currentMode(),
     fan_speed: form.querySelector('[name="fan_speed"]').value,
     quiet: quiet ? quiet.checked : false,
+    comfort: comfort ? comfort.checked : false,
+    economy: economy ? economy.checked : false,
   };
+}
+
+function clearToggle(name, labelSelector) {
+  const input = form.querySelector(`[name="${name}"]`);
+  const label = form.querySelector(labelSelector);
+  if (input?.checked) {
+    input.checked = false;
+    if (label) label.textContent = "Off";
+  }
 }
 
 function syncFormLocks() {
   const powerOn = form.querySelector('[name="power"]').checked;
-  const fanMode = currentMode() === "fan";
+  const mode = currentMode();
+  const comfortOn = Boolean(form.querySelector('[name="comfort"]')?.checked);
+  const tempOk = powerOn && mode === "cool";
+  const fanOk = powerOn && mode !== "dry" && !comfortOn;
+  const quietOk = powerOn && mode === "cool";
+  const extrasOk = powerOn && (mode === "cool" || mode === "dry");
 
   form.classList.toggle("is-off", !powerOn);
-  form.classList.toggle("is-fan-mode", fanMode);
+  form.classList.toggle("is-temp-locked", !tempOk);
+  form.classList.toggle("is-fan-locked", !fanOk);
+  form.classList.toggle("is-quiet-locked", !quietOk);
+  form.classList.toggle("is-extras-locked", !extrasOk);
 
   form.querySelectorAll(".depends-on-power").forEach((el) => {
     if ("disabled" in el) el.disabled = !powerOn;
   });
 
   form.querySelectorAll(".depends-on-cool").forEach((el) => {
-    if ("disabled" in el) el.disabled = !powerOn || fanMode;
+    if ("disabled" in el) el.disabled = !tempOk;
   });
+
+  form.querySelectorAll(".depends-on-fan").forEach((el) => {
+    if ("disabled" in el) el.disabled = !fanOk;
+  });
+
+  form.querySelectorAll(".depends-on-quiet").forEach((el) => {
+    if ("disabled" in el) el.disabled = !quietOk;
+  });
+
+  form.querySelectorAll(".depends-on-extras").forEach((el) => {
+    if ("disabled" in el) el.disabled = !extrasOk;
+  });
+
+  // Info buttons are never disabled
+  form.querySelectorAll(".info-btn").forEach((el) => {
+    el.disabled = false;
+  });
+
+  if (!quietOk) clearToggle("quiet", ".quiet-label");
+  if (!extrasOk) {
+    clearToggle("comfort", ".comfort-label");
+    clearToggle("economy", ".economy-label");
+    restoreFanAfterAutoLock();
+  }
 }
 
 function setTemp(value) {
@@ -181,16 +255,47 @@ function setFan(value) {
   });
 }
 
+function fanForcedAuto() {
+  return (
+    currentMode() === "dry" ||
+    Boolean(form.querySelector('[name="comfort"]')?.checked)
+  );
+}
+
+function rememberFanBeforeAutoLock() {
+  const current = form.querySelector('[name="fan_speed"]').value;
+  if (roomState[activeId].fanBeforeAutoLock == null) {
+    roomState[activeId].fanBeforeAutoLock = current;
+  }
+  setFan("auto");
+}
+
+function restoreFanAfterAutoLock() {
+  if (fanForcedAuto()) return;
+  const prev = roomState[activeId].fanBeforeAutoLock;
+  roomState[activeId].fanBeforeAutoLock = null;
+  if (prev) setFan(prev);
+}
+
 function setMode(mode) {
   const radio = form.querySelector(`input[name="mode"][value="${mode}"]`);
   if (radio) radio.checked = true;
   syncFormLocks();
 }
 
+function applyToggle(name, on, labelSelector) {
+  const input = form.querySelector(`[name="${name}"]`);
+  if (!input) return;
+  input.checked = on;
+  const label = form.querySelector(labelSelector);
+  if (label) label.textContent = on ? "On" : "Off";
+}
+
 function applyValues(values) {
   const room = activeRoom();
   let fanSpeed = values.fan_speed;
-  if (fanSpeed === "night" && !room.supportsNight) fanSpeed = "1";
+  if (fanSpeed === "night" && !featuresOf(room).night) fanSpeed = "1";
+  if (values.comfort || values.mode === "dry") fanSpeed = "auto";
 
   form.querySelector('[name="power"]').checked = values.power;
   form.querySelector(".power-label").textContent = values.power ? "On" : "Off";
@@ -198,10 +303,12 @@ function applyValues(values) {
   setMode(values.mode);
   setFan(fanSpeed);
 
-  const quiet = form.querySelector('[name="quiet"]');
-  if (quiet) {
-    quiet.checked = values.quiet;
-    form.querySelector(".quiet-label").textContent = values.quiet ? "On" : "Off";
+  applyToggle("quiet", values.quiet, ".quiet-label");
+  applyToggle("comfort", values.comfort, ".comfort-label");
+  applyToggle("economy", values.economy, ".economy-label");
+
+  if (!(values.comfort || values.mode === "dry")) {
+    roomState[activeId].fanBeforeAutoLock = null;
   }
 
   syncFormLocks();
@@ -227,19 +334,19 @@ function buildTempTicks() {
 
 function buildFanBars(supportsNight) {
   const auto = `
-    <button type="button" class="fan-option fan-option--icon depends-on-power" data-value="auto" aria-label="Auto fan" title="Auto">
+    <button type="button" class="fan-option fan-option--icon depends-on-power depends-on-fan" data-value="auto" aria-label="Auto fan" title="Auto">
       ${icon("hdr_auto")}
     </button>`;
 
   const bars = FAN_LEVELS.map(
     (level, i) => `
-      <button type="button" class="fan-option fan-option--bar depends-on-power" data-value="${level}" aria-label="Fan speed ${level}">
+      <button type="button" class="fan-option fan-option--bar depends-on-power depends-on-fan" data-value="${level}" aria-label="Fan speed ${level}">
         <span class="fan-bar" style="--bar-h: ${20 + i * 16}%"></span>
       </button>`
   ).join("");
 
   const night = supportsNight
-    ? `<button type="button" class="fan-option fan-option--icon depends-on-power" data-value="night" aria-label="Night fan" title="Night">
+    ? `<button type="button" class="fan-option fan-option--icon depends-on-power depends-on-fan" data-value="night" aria-label="Night fan" title="Night">
         ${icon("bedtime")}
       </button>`
     : "";
@@ -247,30 +354,109 @@ function buildFanBars(supportsNight) {
   return `${auto}<div class="fan-bars">${bars}</div>${night}`;
 }
 
-function renderRoomExtras(room) {
-  form.querySelector(".fan-picker").innerHTML = buildFanBars(room.supportsNight);
+function buildToggleRow({ name, label, tip, lockClass }) {
+  const info = tip
+    ? `<span class="field-label">
+        <span>${label}</span>
+        <button type="button" class="info-btn" aria-label="About ${label}" aria-expanded="false">
+          ${icon("info")}
+        </button>
+        <span class="info-tip" role="tooltip">${tip}</span>
+      </span>`
+    : `<span>${label}</span>`;
 
-  const quietSlot = form.querySelector(".quiet-slot");
-  quietSlot.innerHTML = room.supportsQuiet
-    ? `<div class="field field--row depends-on-power-group">
-        <span>Quiet</span>
-        <label class="toggle-switch">
-          <input type="checkbox" name="quiet" value="on" class="depends-on-power" />
-          <span class="toggle-track"><span class="toggle-knob"></span></span>
-          <span class="quiet-label">Off</span>
-        </label>
-      </div>`
-    : "";
+  return `<div class="field field--row depends-on-power-group ${lockClass}">
+      ${info}
+      <label class="toggle-switch">
+        <input type="checkbox" name="${name}" value="on" class="depends-on-power ${lockClass.replace("-group", "")}" />
+        <span class="toggle-track"><span class="toggle-knob"></span></span>
+        <span class="${name}-label">Off</span>
+      </label>
+    </div>`;
+}
+
+function bindToggleLabel(name) {
+  const input = form.querySelector(`[name="${name}"]`);
+  const label = form.querySelector(`.${name}-label`);
+  if (!input || !label) return;
+  input.addEventListener("change", () => {
+    label.textContent = input.checked ? "On" : "Off";
+  });
+}
+
+function bindInfoTips(root) {
+  if (!root) return;
+  root.querySelectorAll(".field-label").forEach((wrap) => {
+    const btn = wrap.querySelector(".info-btn");
+    if (!btn) return;
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const open = wrap.classList.contains("is-tip-open");
+      form.querySelectorAll(".field-label.is-tip-open").forEach((el) => {
+        el.classList.remove("is-tip-open");
+        el.querySelector(".info-btn")?.setAttribute("aria-expanded", "false");
+      });
+      if (!open) {
+        wrap.classList.add("is-tip-open");
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+}
+
+function renderRoomExtras(room) {
+  const features = featuresOf(room);
+  form.querySelector(".fan-picker").innerHTML = buildFanBars(features.night);
+
+  const parts = [];
+  if (features.quiet) {
+    parts.push(
+      buildToggleRow({
+        name: "quiet",
+        label: "Quiet",
+        tip: null,
+        lockClass: "depends-on-quiet-group",
+      })
+    );
+  }
+  if (features.comfortEconomy) {
+    parts.push(
+      buildToggleRow({
+        name: "comfort",
+        label: "Comfort",
+        tip: "Aims airflow up, away from people. Locks fan to Auto.",
+        lockClass: "depends-on-extras-group",
+      })
+    );
+    parts.push(
+      buildToggleRow({
+        name: "economy",
+        label: "Economy",
+        tip: "Caps power use—best for long runs once the room is cool.",
+        lockClass: "depends-on-extras-group",
+      })
+    );
+  }
+
+  const extrasSlot = form.querySelector(".extras-slot");
+  if (extrasSlot) extrasSlot.innerHTML = parts.join("");
 
   form.querySelectorAll(".fan-option").forEach((btn) => {
     btn.addEventListener("click", () => setFan(btn.dataset.value));
   });
 
-  const quietInput = form.querySelector('[name="quiet"]');
-  const quietLabel = form.querySelector(".quiet-label");
-  if (quietInput && quietLabel) {
-    quietInput.addEventListener("change", () => {
-      quietLabel.textContent = quietInput.checked ? "On" : "Off";
+  bindToggleLabel("quiet");
+  bindToggleLabel("comfort");
+  bindToggleLabel("economy");
+  bindInfoTips(extrasSlot);
+
+  const comfortInput = form.querySelector('[name="comfort"]');
+  if (comfortInput) {
+    comfortInput.addEventListener("change", () => {
+      if (comfortInput.checked) rememberFanBeforeAutoLock();
+      else restoreFanAfterAutoLock();
+      syncFormLocks();
     });
   }
 }
@@ -370,6 +556,10 @@ function createPanel() {
               <span class="segment-face">${icon("ac_unit")}<span>Cool</span></span>
             </label>
             <label class="segment">
+              <input type="radio" name="mode" value="dry" class="depends-on-power" />
+              <span class="segment-face">${icon("water_drop")}<span>Dry</span></span>
+            </label>
+            <label class="segment">
               <input type="radio" name="mode" value="fan" class="depends-on-power" />
               <span class="segment-face">${icon("mode_fan")}<span>Fan</span></span>
             </label>
@@ -398,13 +588,13 @@ function createPanel() {
           </div>
         </div>
 
-        <div class="field depends-on-power-group">
+        <div class="field depends-on-power-group depends-on-fan-group">
           <span>Fan speed</span>
           <input type="hidden" name="fan_speed" value="auto" />
           <div class="fan-picker"></div>
         </div>
 
-        <div class="quiet-slot"></div>
+        <div class="extras-slot"></div>
 
         <div class="actions">
           <button type="button" class="btn btn--ghost refresh-btn">Refresh</button>
@@ -428,15 +618,27 @@ function createPanel() {
   });
 
   form.querySelectorAll('input[name="mode"]').forEach((radio) => {
-    radio.addEventListener("change", () => syncFormLocks());
+    radio.addEventListener("change", () => {
+      if (fanForcedAuto()) rememberFanBeforeAutoLock();
+      else restoreFanAfterAutoLock();
+      syncFormLocks();
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest(".field-label")) return;
+    form.querySelectorAll(".field-label.is-tip-open").forEach((el) => {
+      el.classList.remove("is-tip-open");
+      el.querySelector(".info-btn")?.setAttribute("aria-expanded", "false");
+    });
   });
 
   form.querySelector(".temp-down").addEventListener("click", () => {
-    if (form.classList.contains("is-fan-mode") || form.classList.contains("is-off")) return;
+    if (form.classList.contains("is-temp-locked") || form.classList.contains("is-off")) return;
     setTemp(Number(form.querySelector('[name="temp"]').value) - 1);
   });
   form.querySelector(".temp-up").addEventListener("click", () => {
-    if (form.classList.contains("is-fan-mode") || form.classList.contains("is-off")) return;
+    if (form.classList.contains("is-temp-locked") || form.classList.contains("is-off")) return;
     setTemp(Number(form.querySelector('[name="temp"]').value) + 1);
   });
 
@@ -448,7 +650,7 @@ function createPanel() {
   };
 
   scale.addEventListener("pointerdown", (event) => {
-    if (form.classList.contains("is-off") || form.classList.contains("is-fan-mode")) return;
+    if (form.classList.contains("is-off") || form.classList.contains("is-temp-locked")) return;
     scale.setPointerCapture(event.pointerId);
     setTempFromClientX(event.clientX);
   });
@@ -488,10 +690,17 @@ async function init() {
   activeId = resolveInitialRoomId();
   persistActiveRoom(activeId);
 
-  createPanel();
-  document.getElementById("app").appendChild(panel);
-  updateTabIndicators();
-  setRoomOnline(activeId, null);
+  try {
+    createPanel();
+    document.getElementById("app").appendChild(panel);
+    updateTabIndicators();
+    setRoomOnline(activeId, null);
+  } catch (err) {
+    document.getElementById("app").innerHTML =
+      `<p class="toast toast--error">${err.message || err}</p>`;
+    console.error(err);
+    return;
+  }
 
   AIRCONS.forEach(async (room) => {
     const roomId = room.id;
