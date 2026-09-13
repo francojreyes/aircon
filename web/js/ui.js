@@ -49,6 +49,8 @@ function initRoomState(rooms) {
       room.id,
       {
         online: null,
+        loadingGet: false,
+        sending: false,
         fanBeforeAutoLock: null,
         values: {
           power: false,
@@ -75,12 +77,13 @@ function showToast(message, type) {
   }, 3000);
 }
 
-function renderStatusBadge(online) {
+function renderStatusBadge() {
+  const state = roomState[activeId];
   const badge = panel.querySelector(".status-badge");
-  if (online === null) {
-    badge.textContent = "Unknown";
-    badge.className = "status-badge status-badge--unknown";
-  } else if (online) {
+  if (state.online === null) {
+    badge.textContent = "Connecting";
+    badge.className = "status-badge status-badge--connecting";
+  } else if (state.online) {
     badge.textContent = "Online";
     badge.className = "status-badge status-badge--online";
   } else {
@@ -94,15 +97,26 @@ function setRoomOnline(roomId, online) {
   if (!roomState[roomId]) return;
   roomState[roomId].online = online;
   updateTabIndicators();
-  if (roomId === activeId) {
-    renderStatusBadge(online);
-    syncSendButton();
-  }
+  if (roomId === activeId) syncBusyUi();
 }
 
-function syncSendButton() {
+function syncBusyUi() {
+  if (!form) return;
+  const state = roomState[activeId];
+  renderStatusBadge();
+
+  const refreshBtn = form.querySelector(".refresh-btn");
+  refreshBtn.disabled = state.loadingGet;
+  refreshBtn.textContent = state.loadingGet ? "Refreshing..." : "Refresh";
+
   const sendBtn = form.querySelector(".send-btn");
-  sendBtn.disabled = roomState[activeId].online !== true;
+  if (state.sending) {
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending...";
+  } else {
+    sendBtn.textContent = "Send";
+    sendBtn.disabled = state.online !== true || state.loadingGet;
+  }
 }
 
 function updateTabIndicators() {
@@ -312,7 +326,7 @@ function applyValues(values) {
   }
 
   syncFormLocks();
-  syncSendButton();
+  syncBusyUi();
 }
 
 function populateFromApi(state, roomId = activeId) {
@@ -484,9 +498,15 @@ function switchRoom(id) {
 
 async function loadState({ silent = false, roomId = activeId } = {}) {
   const requestedId = roomId;
+  const state = roomState[requestedId];
+  if (!state || state.loadingGet) return;
+
+  state.loadingGet = true;
+  if (requestedId === activeId) syncBusyUi();
+
   try {
-    const state = await fetchGet(requestedId);
-    populateFromApi(state, requestedId);
+    const remote = await fetchGet(requestedId);
+    populateFromApi(remote, requestedId);
     setRoomOnline(requestedId, true);
     if (!silent && requestedId === activeId) showToast("State loaded", "success");
   } catch (err) {
@@ -495,26 +515,31 @@ async function loadState({ silent = false, roomId = activeId } = {}) {
       applyValues(roomState[requestedId].values);
       if (!silent) showToast(err.message, "error");
     }
+  } finally {
+    state.loadingGet = false;
+    if (requestedId === activeId) syncBusyUi();
   }
 }
 
 async function sendState() {
-  if (roomState[activeId].online !== true) return;
+  if (roomState[activeId].online !== true || roomState[activeId].loadingGet) return;
+  if (roomState[activeId].sending) return;
 
   const requestedId = activeId;
-  const sendBtn = form.querySelector(".send-btn");
-  sendBtn.disabled = true;
+  roomState[requestedId].sending = true;
+  syncBusyUi();
   try {
     const params = readForm();
-    const state = await fetchSet(requestedId, params);
-    populateFromApi(state, requestedId);
+    const remote = await fetchSet(requestedId, params);
+    populateFromApi(remote, requestedId);
     setRoomOnline(requestedId, true);
     if (requestedId === activeId) showToast("Command sent", "success");
   } catch (err) {
     setRoomOnline(requestedId, false);
     if (requestedId === activeId) showToast(err.message, "error");
   } finally {
-    if (requestedId === activeId) syncSendButton();
+    roomState[requestedId].sending = false;
+    if (requestedId === activeId) syncBusyUi();
   }
 }
 
@@ -537,7 +562,7 @@ function createPanel() {
 
     <div class="panel-body">
       <header class="panel-header">
-        <span class="status-badge status-badge--unknown">Unknown</span>
+        <span class="status-badge status-badge--connecting">Connecting</span>
       </header>
 
       <form class="card-form">
@@ -670,6 +695,7 @@ function createPanel() {
 
   renderRoomExtras(room);
   applyValues(roomState[activeId].values);
+  syncBusyUi();
 }
 
 async function init() {
@@ -696,7 +722,7 @@ async function init() {
     createPanel();
     document.getElementById("app").appendChild(panel);
     updateTabIndicators();
-    setRoomOnline(activeId, null);
+    syncBusyUi();
   } catch (err) {
     document.getElementById("app").innerHTML =
       `<p class="toast toast--error">${err.message || err}</p>`;
@@ -704,15 +730,8 @@ async function init() {
     return;
   }
 
-  AIRCONS.forEach(async (room) => {
-    const roomId = room.id;
-    try {
-      const state = await fetchGet(roomId);
-      populateFromApi(state, roomId);
-      setRoomOnline(roomId, true);
-    } catch {
-      setRoomOnline(roomId, false);
-    }
+  AIRCONS.forEach((room) => {
+    loadState({ silent: true, roomId: room.id });
   });
 }
 

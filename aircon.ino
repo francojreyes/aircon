@@ -382,6 +382,8 @@ void setup() {
   Serial.println();
   Serial.print("WiFi OK. IP: ");
   Serial.println(WiFi.localIP());
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  Serial.println("WiFi sleep disabled (WIFI_NONE_SLEEP)");
 
   if (MDNS.begin(localName)) {
     Serial.println("mDNS responder started");
