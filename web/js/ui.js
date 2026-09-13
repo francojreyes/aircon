@@ -1,5 +1,5 @@
 import { getAircons, featuresForProtocol } from "./config.js";
-import { ensureToken, fetchGet, fetchSet } from "./api.js";
+import { ensureToken, fetchGet, fetchSet } from "./api.js?v=12";
 
 const TEMP_MIN = 18;
 const TEMP_MAX = 30;

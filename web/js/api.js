@@ -41,18 +41,26 @@ export function getToken() {
   const params = new URLSearchParams(window.location.search);
   const fromQuery = params.get("token");
   if (fromQuery) {
-    sessionStorage.setItem(TOKEN_KEY, fromQuery);
+    setToken(fromQuery);
     params.delete("token");
     const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
     window.history.replaceState({}, "", next);
     return fromQuery;
   }
-  return sessionStorage.getItem(TOKEN_KEY) || "";
+  // Prefer localStorage so iOS PWAs keep the token across launches.
+  // Migrate any leftover sessionStorage value from older builds.
+  const stored = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || "";
+  if (stored && !localStorage.getItem(TOKEN_KEY)) {
+    localStorage.setItem(TOKEN_KEY, stored);
+    sessionStorage.removeItem(TOKEN_KEY);
+  }
+  return stored;
 }
 
 export function setToken(token) {
-  if (token) sessionStorage.setItem(TOKEN_KEY, token);
-  else sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
 }
 
 function ngrokHeaders() {
@@ -132,15 +140,20 @@ export async function ensureToken() {
   let token = getToken();
 
   if (token) {
-    const res = await fetch(withTokenQuery(apiUrl("/api/_auth_check")), {
-      headers: authHeaders(),
-      credentials: "omit",
-    });
+    let res;
+    try {
+      res = await fetch(withTokenQuery(apiUrl("/api/_auth_check")), {
+        headers: authHeaders(),
+        credentials: "omit",
+      });
+    } catch (err) {
+      throw new Error(friendlyNetworkError(err));
+    }
     if (res.status === 401) {
       setToken("");
       token = "";
     } else if (!res.ok && res.status !== 204) {
-      throw new Error(friendlyNetworkError(new Error(`Auth check failed (${res.status})`)));
+      throw new Error(`Auth check failed (${res.status})`);
     } else {
       return token;
     }
@@ -156,20 +169,31 @@ export async function ensureToken() {
     throw new Error(friendlyNetworkError(err));
   }
 
+  // Proxy reachable and auth disabled.
   if (probe.status !== 401) return "";
 
   token = window.prompt("Enter aircon access token:");
-  if (!token) throw new Error("Token required");
+  if (!token) {
+    throw new Error("Access token required — open with ?token=… or enter it when prompted");
+  }
   token = token.trim();
   setToken(token);
 
-  const confirm = await fetch(withTokenQuery(apiUrl("/api/_auth_check")), {
-    headers: authHeaders(),
-    credentials: "omit",
-  });
+  let confirm;
+  try {
+    confirm = await fetch(withTokenQuery(apiUrl("/api/_auth_check")), {
+      headers: authHeaders(),
+      credentials: "omit",
+    });
+  } catch (err) {
+    throw new Error(friendlyNetworkError(err));
+  }
   if (confirm.status === 401) {
     setToken("");
-    throw new Error("Invalid token");
+    throw new Error("Invalid access token");
+  }
+  if (!confirm.ok && confirm.status !== 204) {
+    throw new Error(`Auth check failed (${confirm.status})`);
   }
   return token;
 }
@@ -201,7 +225,9 @@ async function fetchJson(path, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
 
         if (response.status === 401) {
           setToken("");
-          throw new Error("Unauthorized — add ?token=YOUR_SECRET to the page URL");
+          throw new Error(
+            "Access token missing or wrong — reopen with ?token=… or clear site data and try again"
+          );
         }
 
         const contentType = response.headers.get("Content-Type") || "";
