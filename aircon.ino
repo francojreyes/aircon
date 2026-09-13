@@ -290,8 +290,9 @@ void handleACSet() {
   sendCorsHeaders();
   applyQueryParams();
   sendIr();
-  saveStateToEeprom(ac.getStatePrev());
-  server.send(200, "application/json", stateToJson(ac.getStatePrev()));
+  const sent = ac.getStatePrev();
+  saveStateToEeprom(sent);
+  server.send(200, "application/json", stateToJson(sent));
 }
 
 void handleOptions() {

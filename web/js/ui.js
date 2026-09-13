@@ -530,8 +530,8 @@ async function sendState() {
   syncBusyUi();
   try {
     const params = readForm();
-    const remote = await fetchSet(requestedId, params);
-    populateFromApi(remote, requestedId);
+    const state = await fetchSet(requestedId, params);
+    populateFromApi(state, requestedId);
     setRoomOnline(requestedId, true);
     if (requestedId === activeId) showToast("Command sent", "success");
   } catch (err) {
