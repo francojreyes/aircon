@@ -85,7 +85,7 @@ bool loadStateFromEeprom() {
   PersistedState stored;
   EEPROM.get(0, stored);
 
-  if (stored.magic != kStateMagic || stored.version != kStateVersion) {
+  if (stored.magic != kStateMagic || (stored.version != 1 && stored.version != kStateVersion)) {
     Serial.println("No persisted AC state found");
     return false;
   }
@@ -93,6 +93,13 @@ bool loadStateFromEeprom() {
   if (stored.temp < 18 || stored.temp > 30) {
     Serial.println("Persisted temp out of range; ignoring");
     return false;
+  }
+
+  // v1 had no econo/comfort; those EEPROM bytes are garbage — default off.
+  const bool fromV1 = stored.version == 1;
+  if (fromV1) {
+    stored.econo = 0;
+    stored.comfort = 0;
   }
 
   ac.next.protocol = ac_protocol;
@@ -108,7 +115,12 @@ bool loadStateFromEeprom() {
   }
   ac.markAsSent(); // so /get matches without re-blasting IR
 
-  Serial.println("Restored AC state from EEPROM");
+  if (fromV1) {
+    saveStateToEeprom(ac.next); // rewrite as v2 for next boot
+    Serial.println("Migrated AC state from EEPROM v1 -> v2");
+  } else {
+    Serial.println("Restored AC state from EEPROM");
+  }
   return true;
 }
 
