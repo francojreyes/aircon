@@ -43,8 +43,8 @@ decode_type_t protocolForRoom(Room room) {
 const char* localName = nameForRoom(kRoom);
 decode_type_t ac_protocol = protocolForRoom(kRoom);
 
-const char* ssid = "TP-Link";
-const char* password = "francooo";
+// WiFi credentials live in secrets.h (gitignored). Copy secrets.h.example → secrets.h.
+#include "secrets.h"
 
 ESP8266WebServer server(80);
 
@@ -359,62 +359,106 @@ void scanNetworks() {
   WiFi.scanDelete();
 }
 
+bool g_wifiReady = false;
+unsigned long g_lastWifiAttemptMs = 0;
+const unsigned long kWifiRetryMs = 15000;
+
+void startServices() {
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+
+  Serial.print("WiFi OK. IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("WiFi sleep disabled (WIFI_NONE_SLEEP)");
+
+  // mDNS must be restarted after every reconnect / IP change.
+  MDNS.end();
+  if (MDNS.begin(localName)) {
+    Serial.println("mDNS responder started");
+  } else {
+    Serial.println("mDNS responder failed");
+  }
+}
+
+void ensureWifi() {
+  const wl_status_t status = WiFi.status();
+
+  if (status == WL_CONNECTED) {
+    if (!g_wifiReady) {
+      startServices();
+      g_wifiReady = true;
+    }
+    return;
+  }
+
+  if (g_wifiReady) {
+    Serial.print("WiFi lost (");
+    Serial.print(wifiStatusToString(status));
+    Serial.println(") — waiting to reconnect");
+    g_wifiReady = false;
+    MDNS.end();
+  }
+
+  const unsigned long now = millis();
+  if (now - g_lastWifiAttemptMs < kWifiRetryMs && g_lastWifiAttemptMs != 0) {
+    return;
+  }
+  g_lastWifiAttemptMs = now;
+
+  Serial.print("WiFi connecting to ");
+  Serial.print(ssid);
+  Serial.print(" (status=");
+  Serial.print(wifiStatusToString(status));
+  Serial.println(")");
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(ssid, password);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
   Serial.println("Booting aircon controller...");
+  Serial.print("Room: ");
+  Serial.println(localName);
 
   EEPROM.begin(kEepromSize);
   loadStateFromEeprom();
 
   WiFi.mode(WIFI_STA);
+  WiFi.hostname(localName);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
   WiFi.disconnect();
   delay(100);
   scanNetworks();
-
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to SSID: ");
-  Serial.println(ssid);
-
-  uint8_t attempts = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-    if (attempts % 20 == 0) {
-      Serial.println();
-      Serial.print("Still waiting... status=");
-      Serial.println(wifiStatusToString(WiFi.status()));
-    }
-    if (attempts >= 60) { // ~30 seconds
-      Serial.println();
-      Serial.println("WiFi failed. Check SSID/password and that the network is 2.4 GHz.");
-      Serial.print("Final status=");
-      Serial.println(wifiStatusToString(WiFi.status()));
-      return; // Don't start the server without WiFi
-    }
-  }
-
-  Serial.println();
-  Serial.print("WiFi OK. IP: ");
-  Serial.println(WiFi.localIP());
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
-  Serial.println("WiFi sleep disabled (WIFI_NONE_SLEEP)");
-
-  if (MDNS.begin(localName)) {
-    Serial.println("mDNS responder started");
-  }
 
   server.on("/get", HTTP_GET, handleACGet);
   server.on("/get", HTTP_OPTIONS, handleOptions);
   server.on("/set", HTTP_GET, handleACSet);
   server.on("/set", HTTP_OPTIONS, handleOptions);
   server.begin();
-  Serial.println("HTTP server ready");
+  Serial.println("HTTP server ready (waiting for WiFi)");
+
+  // First connect attempt; retries continue in loop().
+  g_lastWifiAttemptMs = 0;
+  ensureWifi();
+  const unsigned long bootDeadline = millis() + 30000;
+  while (WiFi.status() != WL_CONNECTED && millis() < bootDeadline) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  ensureWifi();
+  if (!g_wifiReady) {
+    Serial.println("WiFi not up yet — will keep retrying in background");
+  }
 }
 
 void loop() {
-  server.handleClient();
-  MDNS.update();
+  ensureWifi();
+  if (g_wifiReady) {
+    server.handleClient();
+    MDNS.update();
+  }
 }

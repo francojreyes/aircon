@@ -74,11 +74,16 @@ echo "FQBN:  $FQBN"
 echo "Port:  $port"
 echo "Room:  $room"
 echo
+echo "Compiling…"
 
 arduino-cli compile \
   --fqbn "$FQBN" \
+  --jobs 0 \
   --build-property "compiler.cpp.extra_flags=-DAIRCON_ROOM=${room}" \
   "$SKETCH"
+
+echo
+echo "Uploading…"
 
 arduino-cli upload \
   -p "$port" \
