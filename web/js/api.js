@@ -98,7 +98,7 @@ function friendlyNetworkError(err) {
     err.name === "TypeError" ||
     /Failed to fetch|NetworkError|Load failed|Network request failed/i.test(msg)
   ) {
-    return "Cannot reach the aircon proxy — is ngrok/proxy running on your Mac?";
+    return "Cannot reach the aircon proxy — is ngrok/proxy running?";
   }
   if (err.name === "AbortError") {
     return "Proxy timed out — is ngrok/proxy running?";
@@ -126,7 +126,7 @@ export async function ensureApiReady() {
     const body = await res.json();
     if (!body.ok || body.service !== "aircon-proxy") {
       throw new Error(
-        "That URL is not the aircon proxy — start ./proxy/serve.sh behind ngrok"
+        "That URL is not the aircon proxy — check DEFAULT_API_BASE / ?api="
       );
     }
   } catch (err) {
