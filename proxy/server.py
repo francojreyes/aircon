@@ -17,8 +17,9 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", "8080"))
-UPSTREAM_TIMEOUT = float(os.environ.get("AIRCON_UPSTREAM_TIMEOUT", "10"))
+UPSTREAM_TIMEOUT = float(os.environ.get("AIRCON_UPSTREAM_TIMEOUT", "4"))
 # Transient ESP/WiFi blips: try again before 502 (total attempts).
+# Keep attempts × timeout under the web UI fetch budget (~15s).
 UPSTREAM_ATTEMPTS = max(1, int(os.environ.get("AIRCON_UPSTREAM_ATTEMPTS", "2")))
 UPSTREAM_RETRY_DELAY = float(os.environ.get("AIRCON_UPSTREAM_RETRY_DELAY", "0.4"))
 TOKEN = os.environ.get("AIRCON_TOKEN", "").strip()
@@ -44,14 +45,34 @@ def load_rooms() -> dict[str, dict]:
 ROOMS = load_rooms()
 
 
+def is_link_local(ip: str) -> bool:
+    """169.254/16 means the ESP has no DHCP lease — unusable on the LAN."""
+    try:
+        a, b, *_ = (int(p) for p in ip.split("."))
+        return a == 169 and b == 254
+    except (TypeError, ValueError):
+        return False
+
+
 def resolve_host(hostname: str) -> str:
     now = time.time()
     cached = _dns_cache.get(hostname)
-    if cached and cached[1] > now:
+    if cached and cached[1] > now and not is_link_local(cached[0]):
         return cached[0]
+    if cached and is_link_local(cached[0]):
+        _dns_cache.pop(hostname, None)
 
     infos = socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_STREAM)
-    ip = infos[0][4][0]
+    candidates = [info[4][0] for info in infos]
+    good = [ip for ip in candidates if not is_link_local(ip)]
+    if not good:
+        # Don't pin a long cache on APIPA — fail fast and retry soon.
+        raise OSError(
+            f"{hostname} resolved only to link-local {candidates} (no DHCP) — "
+            "power-cycle/reflash the board"
+        )
+
+    ip = good[0]
     _dns_cache[hostname] = (ip, now + DNS_TTL_SEC)
     print(f"DNS cached {hostname} -> {ip} (ttl {DNS_TTL_SEC:.0f}s)")
     return ip
@@ -68,6 +89,11 @@ def upstream_url(host_base: str, path: str, query: str = "") -> str:
         ip = hostname
     except OSError:
         ip = resolve_host(hostname)
+
+    if is_link_local(ip):
+        raise OSError(
+            f"{hostname or ip} is link-local {ip} (no DHCP) — board not on LAN"
+        )
 
     netloc = f"{ip}:{parsed.port}" if parsed.port else ip
     return urlunparse((parsed.scheme or "http", netloc, path, "", query, ""))
@@ -115,21 +141,34 @@ class Handler(BaseHTTPRequestHandler):
 
         return False
 
+    def _write_body(self, body: bytes) -> None:
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client hung up (often our UI timed out before a slow 502).
+            pass
+
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self._send_cors()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self._write_body(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _send_empty(self, status: int) -> None:
-        self.send_response(status)
-        self._send_cors()
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+        try:
+            self.send_response(status)
+            self._send_cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _proxy(self, room_id: str, action: str) -> None:
         room = ROOMS.get(room_id)
@@ -168,20 +207,25 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(data)))
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
-                    self.wfile.write(data)
+                    self._write_body(data)
                 if attempt > 1:
                     print(f"upstream {room_id}/{action} ok on retry {attempt}")
                 return
             except HTTPError as err:
                 body = err.read() if err.fp else b""
-                self.send_response(err.code)
-                self._send_cors()
-                self.send_header(
-                    "Content-Type", err.headers.get("Content-Type", "text/plain")
-                )
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.send_response(err.code)
+                    self._send_cors()
+                    self.send_header(
+                        "Content-Type", err.headers.get("Content-Type", "text/plain")
+                    )
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self._write_body(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            except (BrokenPipeError, ConnectionResetError):
                 return
             except URLError as err:
                 last_err = err
@@ -204,9 +248,11 @@ class Handler(BaseHTTPRequestHandler):
 
         self._invalidate_dns(room["host"])
         if isinstance(last_err, TimeoutError):
-            self._send_json(502, {"error": "Upstream timed out"})
+            self._send_json(502, {"error": "Upstream timed out — board may be offline"})
         elif isinstance(last_err, URLError):
-            self._send_json(502, {"error": f"Upstream unreachable: {last_err.reason}"})
+            self._send_json(
+                502, {"error": f"Upstream unreachable: {last_err.reason}"}
+            )
         else:
             self._send_json(502, {"error": "Upstream failed"})
 

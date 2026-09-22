@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT_MS = 12000;
+const DEFAULT_TIMEOUT_MS = 15000;
 const TOKEN_KEY = "aircon_token";
 const API_BASE_KEY = "aircon_api_base";
 
@@ -101,7 +101,7 @@ function friendlyNetworkError(err) {
     return "Cannot reach the aircon proxy — is ngrok/proxy running?";
   }
   if (err.name === "AbortError") {
-    return "Proxy timed out — is ngrok/proxy running?";
+    return "Request timed out — board may be offline (or proxy slow)";
   }
   return msg;
 }
